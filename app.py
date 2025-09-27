@@ -9,10 +9,9 @@ import time
 from dotenv import load_dotenv 
 
 # 分割したモジュールをインポート
-# db_models, chart_canvas, api_client は同一ディレクトリにある前提
 from db_models import Session, UserProfile, SleepRecord
 from chart_canvas import MplCanvas
-from api_client import ApiClient # ★★★ これが重要 ★★★
+from api_client import ApiClient 
 
 # 外部ライブラリのインポート (PyQt5)
 from PyQt5.QtWidgets import (
@@ -29,8 +28,24 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --- 環境変数ロード (APIキーなどの読み込み) ---
-# .envファイルから環境変数をロード
 load_dotenv() 
+
+# --- 47都道府県の主要都市リスト ---
+# OpenWeatherMap API向けに、日本語の都道府県名と対応する英語の都市名をマッピング
+JAPAN_MAJOR_CITIES = {
+    "北海道": "Sapporo", "青森県": "Aomori", "岩手県": "Morioka", "宮城県": "Sendai", 
+    "秋田県": "Akita", "山形県": "Yamagata", "福島県": "Fukushima", "茨城県": "Mito", 
+    "栃木県": "Utsunomiya", "群馬県": "Maebashi", "埼玉県": "Saitama", "千葉県": "Chiba", 
+    "東京都": "Tokyo", "神奈川県": "Yokohama", "新潟県": "Niigata", "富山県": "Toyama", 
+    "石川県": "Kanazawa", "福井県": "Fukui", "山梨県": "Kofu", "長野県": "Nagano", 
+    "岐阜県": "Gifu", "静岡県": "Shizuoka", "愛知県": "Nagoya", "三重県": "Tsu", 
+    "滋賀県": "Otsu", "京都府": "Kyoto", "大阪府": "Osaka", "兵庫県": "Kobe", 
+    "奈良県": "Nara", "和歌山県": "Wakayama", "鳥取県": "Tottori", "島根県": "Matsue", 
+    "岡山県": "Okayama", "広島県": "Hiroshima", "山口県": "Yamaguchi", "徳島県": "Tokushima", 
+    "香川県": "Takamatsu", "愛媛県": "Matsuyama", "高知県": "Kochi", "福岡県": "Fukuoka", 
+    "佐賀県": "Saga", "長崎県": "Nagasaki", "熊本県": "Kumamoto", "大分県": "Oita", 
+    "宮崎県": "Miyazaki", "鹿児島県": "Kagoshima", "沖縄県": "Naha"
+}
 
 # --- メインアプリケーションクラス ---
 class SleepTrackerApp(QMainWindow):
@@ -55,7 +70,7 @@ class SleepTrackerApp(QMainWindow):
         # タブの作成
         self._create_record_tab()
         self._create_report_tab()
-        self._create_setting_tab()
+        self._create_setting_tab() # ★★★ ここで設定タブが呼ばれる ★★★
 
         # タブ切り替え時のレポート更新を設定
         self.tab_widget.currentChanged.connect(self._on_tab_change)
@@ -292,6 +307,21 @@ class SleepTrackerApp(QMainWindow):
         
         layout.addLayout(target_sleep_layout)
 
+        # ★★★ 追記箇所: 天気予報の都市設定 ★★★
+        weather_layout = QHBoxLayout()
+        weather_label = QLabel("📍 天気予報の地域設定:")
+        self.weather_city_combo = QComboBox()
+        
+        # 47都道府県のリストをコンボボックスに追加
+        self.weather_city_combo.addItems(JAPAN_MAJOR_CITIES.keys())
+        # デフォルトで東京都が選択されるように設定
+        self.weather_city_combo.setCurrentText("東京都")
+        
+        weather_layout.addWidget(weather_label)
+        weather_layout.addWidget(self.weather_city_combo)
+        layout.addLayout(weather_layout)
+        # ★★★ 追記ここまで ★★★
+
         # 設定保存ボタン (スライダー操作で自動保存されるため不要だが一応配置)
         save_settings_button = QPushButton("設定を保存")
         save_settings_button.clicked.connect(lambda: self._update_target_sleep_hours(self.target_sleep_hours))
@@ -393,8 +423,13 @@ class SleepTrackerApp(QMainWindow):
             
             memo = self.memo_input.text()
             
+            # ★★★ 修正箇所: 選択された都市名を取得し、APIに渡す ★★★
+            selected_city_jp = self.weather_city_combo.currentText()
+            # 内部のAPI呼び出し用に英語の都市名に変換
+            city_en = JAPAN_MAJOR_CITIES.get(selected_city_jp, "Tokyo") 
+            
             # OpenWeatherMap APIから気象データを取得
-            weather_condition, temp = self.api_client.get_weather_data()
+            weather_condition, temp = self.api_client.get_weather_data(city=city_en, country="JP")
 
             # 新しい記録を作成
             new_record = SleepRecord(
@@ -413,7 +448,7 @@ class SleepTrackerApp(QMainWindow):
             self.db_session.commit()
             logger.info("Sleep record saved successfully.")
             
-            QMessageBox.information(self, "登録完了", f"睡眠記録を保存しました。\n睡眠時間: {duration_min // 60}時間 {duration_min % 60}分")
+            QMessageBox.information(self, "登録完了", f"睡眠記録を保存しました。\n地域: {selected_city_jp}\n睡眠時間: {duration_min // 60}時間 {duration_min % 60}分")
             
             # UIを更新
             self._load_records()
@@ -443,7 +478,7 @@ class SleepTrackerApp(QMainWindow):
         
         # もし計算結果が昨日になってしまった場合（例：起床時刻が深夜の場合）は、日付を調整する
         if ideal_bedtime.hour > 12 and target_wake_time.hour() < 12:
-             ideal_bedtime = ideal_bedtime - datetime.timedelta(days=1)
+              ideal_bedtime = ideal_bedtime - datetime.timedelta(days=1)
         
         logger.info(f"Ideal bedtime calculated: {ideal_bedtime.strftime('%Y-%m-%d %H:%M')}")
         return ideal_bedtime
@@ -465,7 +500,6 @@ class SleepTrackerApp(QMainWindow):
             )
             
             # グラフ描画
-            # 修正: MplCanvas.plot_sleep_dataの引数過多エラーを解消するため、4つ目の引数(目標睡眠時間)を削除
             self.canvas.plot_sleep_data(dates, durations, scores)
         else:
             self.avg_duration_label.setText("データ不足 (記録を登録してください)")
